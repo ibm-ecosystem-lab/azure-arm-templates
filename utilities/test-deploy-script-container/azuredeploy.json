@@ -24,11 +24,11 @@
                 "description": "forceUpdateTag property, used to force the execution of the script resource when no other properties have changed."
             }
         },
-        "createStorageAccount": {
+        "existingStorageAccount": {
             "type": "bool",
-            "defaultValue": true,
+            "defaultValue": false,
             "metadata": {
-                "description": "Flag to determine whether to create a new storage account"
+                "description": "Flag to determine whether the storage account already exists"
             }
         },
         "deployOnVnet": {
@@ -66,26 +66,47 @@
                 "description": "The resource group containing the virtual network"
             }
         },
-        "subnetName": {
+        "scriptSubnetName": {
             "type": "string",
             "defaultValue": "script-subnet",
             "metadata": {
                 "description": "Name of the subnet the script will attach to"
             }
         },
-        "subnetCidr": {
+        "scriptSubnetCidr": {
             "type": "string",
-            "defaultValue": "10.0.1.0/27",
+            "defaultValue": "10.0.1.0/28",
             "metadata": {
                 "description": "Address prefix for the script subnet"
             }
         },
+        "endpointSubnetName": {
+            "type": "string",
+            "defaultValue": "endpoint-subnet",
+            "metadata": {
+                "description": "Name of the subnet the storage endpoint will attach to"
+            }
+        },
+        "endpointSubnetCidr": {
+            "type": "string",
+            "defaultValue": "10.0.1.32/28",
+            "metadata": {
+                "description": "Address prefix for the storage endpoint subnet"
+            }
+        },
         "storageAccountName": {
             "type": "string",
-            "defaultValue": "[concat(parameters('namePrefix'), 'deployscript')]",
+            "defaultValue": "[concat(parameters('namePrefix'), 'deployscript',substring(uniqueString(resourceGroup().id),1,7))]",
             "metadata": {
                 "description": "Name for the storage account for the script execution"
             }            
+        },
+        "storageResourceGroup": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().name]",
+            "metadata": {
+                "description": "The resource group containing the storage account"
+            }
         },
         "createManagedIdentity": {
             "type": "bool",
@@ -96,35 +117,20 @@
         },
         "managedIdName": {
             "type": "string",
-            "defaultValue": "[concat(parameters('namePrefix'),'-script-sp')]",
+            "defaultValue": "[concat(parameters('namePrefix'),'-script-id')]",
             "metadata": {
                 "description": "Name of the managed identity used for deployment scripts"
             }
-        },
-        "azureCliVersion": {
-            "type": "string",
-            "defaultValue": "2.48.0",
-            "metadata": {
-                "description": "Container image version to pull. Refer https://mcr.microsoft.com/v2/azure-cli/tags/list for list of available versions."
-            }
-        }
-        
+        }       
     },
     "variables": {
-      "containerGroupName": "[concat(parameters('namePrefix'), '-cg')]",
-      "scriptName": "[concat(parameters('namePrefix'),'-script')]",
       "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
-      "roleDefinitionName": "[guid(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdName')), variables('roleDefinitionId'), resourceGroup().id)]",
-      "subnetIds": [
-        {
-            "id": "[resourceId(parameters('networkResourceGroup'),'Microsoft.Network/virtualNetworks/subnets',parameters('vnetName'),parameters('subnetName'))]"
-        }
-      ]
+      "roleDefinitionName": "[guid(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdName')), variables('roleDefinitionId'), resourceGroup().id)]"
     },
     "resources": [
         {  
             "type": "Microsoft.Network/virtualNetworks",
-            "apiVersion": "2022-07-01",
+            "apiVersion": "2023-06-01",
             "name": "[parameters('vnetName')]",
             "condition": "[and(not(parameters('existingVnet')),parameters('deployOnVnet'))]",
             "location": "[parameters('location')]",
@@ -138,8 +144,8 @@
         },
         {
             "type": "Microsoft.Resources/deployments",
-            "apiVersion": "2022-09-01",
-            "name": "scriptSubnet",
+            "apiVersion": "2023-07-01",
+            "name": "configureSubnets",
             "resourceGroup": "[parameters('networkResourceGroup')]",
             "condition": "[parameters('deployOnVnet')]",
             "dependsOn": [
@@ -154,11 +160,17 @@
                     "vnetName": {
                         "value": "[parameters('vnetName')]"
                     },
-                    "subnetName": {
-                        "value": "[parameters('subnetName')]"
+                    "scriptSubnetName": {
+                        "value": "[parameters('scriptSubnetName')]"
                     },
-                    "subnetCidr": {
-                        "value": "[parameters('subnetCidr')]"
+                    "scriptSubnetCidr": {
+                        "value": "[parameters('scriptSubnetCidr')]"
+                    },
+                    "endpointSubnetName": {
+                        "value": "[parameters('endpointSubnetName')]"
+                    },
+                    "endpointSubnetCidr": {
+                        "value": "[parameters('endpointSubnetCidr')]"
                     }
                 },
                 "template": {
@@ -168,24 +180,30 @@
                         "vnetName": {
                             "type": "string"
                         },
-                        "subnetName": {
+                        "scriptSubnetName": {
                             "type": "string"
                         },
-                        "subnetCidr": {
+                        "scriptSubnetCidr": {
+                            "type": "string"
+                        },
+                        "endpointSubnetName": {
+                            "type": "string"
+                        },
+                        "endpointSubnetCidr": {
                             "type": "string"
                         }
                     },
                     "resources": [
                         {
                             "type": "Microsoft.Network/virtualNetworks/subnets",
-                            "apiVersion": "2023-04-01",
-                            "name": "[format('{0}/{1}', parameters('vnetName'), parameters('subnetName'))]",
+                            "apiVersion": "2023-06-01",
+                            "name": "[format('{0}/{1}', parameters('vnetName'), parameters('scriptSubnetName'))]",
                             "properties": {
-                                "addressPrefix": "[parameters('subnetCidr')]",
+                                "addressPrefix": "[parameters('scriptSubnetCidr')]",
                                 "serviceEndpoints": [
-                                {
-                                    "service": "Microsoft.Storage"
-                                }
+                                    {
+                                        "service": "Microsoft.Storage"
+                                    }
                                 ],
                                 "delegations": [
                                     {
@@ -196,69 +214,330 @@
                                     }
                                 ]
                             }
+                        },
+                        {
+                            "type": "Microsoft.Network/virtualNetworks/subnets",
+                            "apiVersion": "2023-06-01",
+                            "name": "[format('{0}/{1}', parameters('vnetName'), parameters('endpointSubnetName'))]",
+                            "properties": {
+                                "addressPrefix": "[parameters('endpointSubnetCidr')]",
+                                "serviceEndpoints": [
+                                    {
+                                        "service": "Microsoft.Storage"
+                                    }
+                                ]
+                            }
                         }
                     ]
                 }
             }
         },
         {
-            "type": "Microsoft.Resources/deploymentScripts",
-            "apiVersion": "2020-10-01",
-            "comments": "Deploys a test container",
-            "name": "[variables('scriptName')]",
-            "location": "[parameters('location')]",
-            "identity": {
-                "type": "UserAssigned",
-                "userAssignedIdentities": {
-                    "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdName'))]": {}
-                }
-            },
-            "kind": "AzureCLI",
-            "properties": {
-                "forceUpdateTag": "[parameters('rgRoleGuid')]",
-                "containerSettings": {
-                    "containerGroupName": "[variables('containerGroupName')]",
-                    "subnetIds": "[if(parameters('deployOnVnet'),variables('subnetIds'),json('null'))]"
-                },
-                "storageAccountSettings": {
-                    "storageAccountName": "[parameters('storageAccountName')]",
-                    "storageAccountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2022-09-01').keys[0].value]"
-                },
-                "azCliVersion": "[parameters('azureCliVersion')]",  
-                "environmentVariables": [
-                    {
-                        "name": "RESOURCE_GROUP",
-                        "value": "[resourceGroup().name]"
-                    }
-                ],
-                "scriptContent": "while true; do sleep 30; done;",
-                "timeout": "PT120M",
-                "cleanupPreference": "OnSuccess",
-                "retentionInterval": "P1D"
-            },
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2024-07-01",
+            "name": "deploymentScript",
+            "comments": "Creates storage account and private endpoints",
             "dependsOn": [
-                "[variables('roleDefinitionName')]",
-                "[resourceId(parameters('networkResourceGroup'),'Microsoft.Resources/deployments', 'scriptSubnet')]"
-            ]
+                "[resourceId(parameters('networkResourceGroup'),'Microsoft.Resources/deployments', 'configureSubnets')]",
+                "[resourceId('Microsoft.Resources/deployments', 'configureStorage')]",
+                "[resourceId('Microsoft.Authorization/roleAssignments', variables('roleDefinitionName'))]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "expressionEvaluationOptions": {
+                    "scope": "Inner"
+                },
+                "parameters": {
+                    "namePrefix": {
+                        "value": "[parameters('namePrefix')]"
+                    },
+                    "vnetName": {
+                        "value": "[parameters('vnetName')]"
+                    },
+                    "networkResourceGroup": {
+                        "value": "[parameters('networkResourceGroup')]"
+                    },
+                    "scriptSubnetName": {
+                        "value": "[parameters('scriptSubnetName')]"
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "managedIdName": {
+                        "value": "[parameters('managedIdName')]"
+                    },
+                    "deployOnVnet": {
+                        "value": "[parameters('deployOnVnet')]"
+                    },
+                    "rgRoleGuid": {
+                        "value": "[parameters('rgRoleGuid')]"
+                    },
+                    "storageAccountName": {
+                        "value": "[parameters('storageAccountName')]"
+                    },
+                    "storageResourceGroup": {
+                        "value": "[parameters('storageResourceGroup')]"
+                    }
+                },
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "namePrefix": {
+                            "type": "string"
+                        },
+                        "location": {
+                            "type": "string"
+                        },
+                        "scriptSubnetName": {
+                            "type": "string"
+                        },
+                        "networkResourceGroup": {
+                            "type": "string"
+                        },
+                        "vnetName": {
+                            "type": "string"
+                        },
+                        "managedIdName": {
+                            "type": "string"
+                        },
+                        "rgRoleGuid": {
+                            "type": "string"
+                        },
+                        "deployOnVnet": {
+                            "type": "bool"
+                        },
+                        "storageAccountName": {
+                            "type": "string"
+                        },
+                        "storageResourceGroup": {
+                            "type": "string"
+                        }
+
+                    },
+                    "variables": {
+                        "containerGroupName": "[concat(parameters('namePrefix'), '-cg')]",
+                        "scriptName": "[concat(parameters('namePrefix'),'-script')]",
+                        "subnetIds": [
+                            {
+                                "id": "[resourceId(parameters('networkResourceGroup'),'Microsoft.Network/virtualNetworks/subnets',parameters('vnetName'),parameters('scriptSubnetName'))]",
+                                "name": "[parameters('scriptSubnetName')]"
+                            }
+                        ],
+                        "azureCliVersion": "2.60.0"
+                    },
+                    "resources": [
+                        {
+                            "type": "Microsoft.Resources/deploymentScripts",
+                            "apiVersion": "2023-08-01",
+                            "comments": "Deploys a test container",
+                            "name": "[variables('scriptName')]",
+                            "location": "[parameters('location')]",
+                            "identity": {
+                                "type": "UserAssigned",
+                                "userAssignedIdentities": {
+                                    "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdName'))]": {}
+                                }
+                            },
+                            "kind": "AzureCLI",
+                            "properties": {
+                                "forceUpdateTag": "[parameters('rgRoleGuid')]",
+                                "containerSettings": {
+                                    "containerGroupName": "[variables('containerGroupName')]",
+                                    "subnetIds": "[if(parameters('deployOnVnet'),variables('subnetIds'),json('null'))]"
+                                },
+                                "storageAccountSettings": {
+                                    "storageAccountName": "[parameters('storageAccountName')]",
+                                    "storageAccountKey": "[listKeys(resourceId(parameters('storageResourceGroup'),'Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-04-01').keys[0].value]"
+                                },
+                                "azCliVersion": "[variables('azureCliVersion')]",  
+                                "environmentVariables": [
+                                    {
+                                        "name": "RESOURCE_GROUP",
+                                        "value": "[resourceGroup().name]"
+                                    }
+                                ],
+                                "scriptContent": "while true; do sleep 30; done;",
+                                "timeout": "PT120M",
+                                "cleanupPreference": "OnSuccess",
+                                "retentionInterval": "P1D"
+                            },
+                            "dependsOn": [
+                            ]
+                        }
+                    ]
+                }
+            }
         },
         {
-            "type": "Microsoft.Storage/storageAccounts",
-            "apiVersion": "2023-01-01",
-            "condition": "[parameters('createStorageAccount')]",
-            "name": "[parameters('storageAccountName')]",
-            "location": "[parameters('location')]",
-            "sku": {
-                "name": "Standard_LRS",
-                "tier": "Standard"
-            },
-            "kind": "StorageV2",
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2024-07-01",
+            "name": "configureStorage",
+            "condition": "[not(parameters('existingStorageAccount'))]",
+            "comments": "Creates storage account and private endpoints",
+            "dependsOn": [
+                "[resourceId(parameters('networkResourceGroup'),'Microsoft.Resources/deployments', 'configureSubnets')]"
+            ],
             "properties": {
-                "accessTier": "Hot"
+                "mode": "Incremental",
+                "expressionEvaluationOptions": {
+                    "scope": "Inner"
+                },
+                "parameters": {
+                    "location": {
+                        "value": "[parameters('location')]"
+                    },
+                    "storageAccountName": {
+                        "value": "[parameters('storageAccountName')]"
+                    },
+                    "endpointSubnetName": {
+                        "value": "[parameters('endpointSubnetName')]"
+                    },
+                    "networkResourceGroup": {
+                        "value": "[parameters('networkResourceGroup')]"
+                    },
+                    "scriptSubnetName": {
+                        "value": "[parameters('scriptSubnetName')]"
+                    },
+                    "storageEndpointName": {
+                        "value": "[concat(parameters('namePrefix'),'-storage-endpoint')]"
+                    },
+                    "vnetName": {
+                        "value": "[parameters('vnetName')]"
+                    }
+
+                },
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "location": {
+                            "type": "string"
+                        },
+                        "storageAccountName":  {
+                            "type": "string"
+                        },
+                        "networkResourceGroup": {
+                            "type": "string"
+                        },
+                        "vnetName": {
+                            "type": "string"
+                        },
+                        "scriptSubnetName": {
+                            "type": "string"
+                        },
+                        "storageEndpointName": {
+                            "type": "string"
+                        },
+                        "endpointSubnetName": {
+                            "type": "string"
+                        }
+
+                    },
+                    "variables": {
+                        "storageZoneName": "[concat('privatelink.file.',environment().suffixes.storage)]"
+                    },
+                    "resources": [
+                        {
+                            "type": "Microsoft.Storage/storageAccounts",
+                            "apiVersion": "2023-04-01",
+                            "name": "[parameters('storageAccountName')]",
+                            "location": "[parameters('location')]",
+                            "sku": {
+                                "name": "Standard_LRS"
+                            },
+                            "kind": "StorageV2",
+                            "properties": {
+                                "supportsHttpsTrafficOnly": true,
+                                "allowSharedKeyAccess": true,
+                                "isHnsEnabled": false,
+                                "minimumTlsVersion": "TLS1_2",
+                                "allowBlobPublicAccess": false,
+                                "publicNetworkAccess": "Enabled",
+                                "networkAcls": {
+                                    "bypass": "AzureServices",
+                                    "defaultAction": "Deny",
+                                    "virtualNetworkRules": [
+                                        {
+                                            "id": "[resourceId(parameters('networkResourceGroup'),'Microsoft.Network/virtualNetworks/subnets',parameters('vnetName'),parameters('scriptSubnetName'))]",
+                                            "action": "Allow"
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "type": "Microsoft.Network/privateDnsZones",
+                            "apiVersion": "2024-06-01",
+                            "name": "[variables('storageZoneName')]",
+                            "location": "global",
+                            "properties": {}
+                        },
+                        {
+                            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+                            "apiVersion": "2024-06-01",
+                            "name": "[concat(variables('storageZoneName'),'/',parameters('vnetName'),'-link')]",
+                            "location": "global",
+                            "properties": {
+                                "registrationEnabled": false,
+                                "virtualNetwork": {
+                                    "id": "[resourceId(parameters('networkResourceGroup'),'Microsoft.Network/virtualNetworks', parameters('vnetName'))]"
+                                }
+                            },
+                            "dependsOn": [
+                                "[resourceId('Microsoft.Network/privateDnsZones', variables('storageZoneName'))]"
+                            ]
+                        },
+                        {
+                            "type": "Microsoft.Network/privateEndpoints",
+                            "apiVersion": "2023-11-01",
+                            "name": "[parameters('storageEndpointName')]",
+                            "location": "[parameters('location')]",
+                            "properties": {
+                                "subnet": {
+                                    "id": "[resourceId(parameters('networkResourceGroup'),'Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), parameters('endpointSubnetName'))]"
+                                },
+                                "privateLinkServiceConnections": [
+                                    {
+                                        "name": "[parameters('storageEndpointName')]",
+                                        "properties": {
+                                            "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts',parameters('storageAccountName'))]",
+                                            "groupIds": [
+                                                "file"
+                                            ]
+                                        }
+                                    }
+                                ]
+                            },
+                            "dependsOn": [
+                                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+                            ]
+                        },
+                        {
+                            "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                            "apiVersion": "2022-07-01",
+                            "name": "[concat(parameters('storageEndpointName'),'/','dnsgroupname')]",
+                            "properties": {
+                                "privateDnsZoneConfigs": [
+                                    {
+                                        "name": "premium",
+                                        "properties": {
+                                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('storageZoneName'))]"
+                                        }
+                                    }
+                                ]
+                            },
+                            "dependsOn": [
+                                "[resourceId('Microsoft.Network/privateEndpoints',parameters('storageEndpointName'))]"
+                            ]
+                        }
+                    ]
+                }
             }
         },
         {
             "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-            "apiVersion": "2018-11-30",
+            "apiVersion": "2023-01-31",
             "name": "[parameters('managedIdName')]",
             "condition": "[parameters('createManagedIdentity')]",
             "location": "[parameters('location')]"
@@ -273,7 +552,7 @@
             ],
             "properties": {
                 "roleDefinitionId": "[variables('roleDefinitionId')]",
-                "principalId": "[reference(parameters('managedIdName'), '2018-11-30').principalId]",
+                "principalId": "[reference(parameters('managedIdName'), '2023-01-31').principalId]",
                 "scope": "[resourceGroup().id]",
                 "principalType": "ServicePrincipal"
             }
