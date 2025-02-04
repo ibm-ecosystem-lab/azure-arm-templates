@@ -404,6 +404,9 @@
                     },
                     "vnetName": {
                         "value": "[parameters('vnetName')]"
+                    },
+                    "deployOnVnet": {
+                        "value": "[parameters('deployOnVnet')]"
                     }
 
                 },
@@ -431,11 +434,35 @@
                         },
                         "endpointSubnetName": {
                             "type": "string"
+                        },
+                        "deployOnVnet": {
+                            "type": "bool"
                         }
 
                     },
                     "variables": {
-                        "storageZoneName": "[concat('privatelink.file.',environment().suffixes.storage)]"
+                        "storageZoneName": "[concat('privatelink.file.',environment().suffixes.storage)]",
+                        "storagePropertiesVnet": {
+                            "supportsHttpsTrafficOnly": true,
+                            "allowSharedKeyAccess": true,
+                            "isHnsEnabled": false,
+                            "minimumTlsVersion": "TLS1_2",
+                            "allowBlobPublicAccess": false,
+                            "publicNetworkAccess": "Enabled",
+                            "networkAcls": {
+                                "bypass": "AzureServices",
+                                "defaultAction": "Deny",
+                                "virtualNetworkRules": [
+                                    {
+                                        "id": "[resourceId(parameters('networkResourceGroup'),'Microsoft.Network/virtualNetworks/subnets',parameters('vnetName'),parameters('scriptSubnetName'))]",
+                                        "action": "Allow"
+                                    }
+                                ]
+                            }
+                        },
+                        "storagePropertiesNoVnet": {
+                            "accessTier": "Hot"
+                        }
                     },
                     "resources": [
                         {
@@ -447,27 +474,11 @@
                                 "name": "Standard_LRS"
                             },
                             "kind": "StorageV2",
-                            "properties": {
-                                "supportsHttpsTrafficOnly": true,
-                                "allowSharedKeyAccess": true,
-                                "isHnsEnabled": false,
-                                "minimumTlsVersion": "TLS1_2",
-                                "allowBlobPublicAccess": false,
-                                "publicNetworkAccess": "Enabled",
-                                "networkAcls": {
-                                    "bypass": "AzureServices",
-                                    "defaultAction": "Deny",
-                                    "virtualNetworkRules": [
-                                        {
-                                            "id": "[resourceId(parameters('networkResourceGroup'),'Microsoft.Network/virtualNetworks/subnets',parameters('vnetName'),parameters('scriptSubnetName'))]",
-                                            "action": "Allow"
-                                        }
-                                    ]
-                                }
-                            }
+                            "properties": "[if(parameters('deployOnVnet'),variables('storagePropertiesVnet'),variables('storagePropertiesNoVnet'))]"
                         },
                         {
                             "type": "Microsoft.Network/privateDnsZones",
+                            "condition": "[parameters('deployOnVnet')]",
                             "apiVersion": "2024-06-01",
                             "name": "[variables('storageZoneName')]",
                             "location": "global",
@@ -477,6 +488,7 @@
                             "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
                             "apiVersion": "2024-06-01",
                             "name": "[concat(variables('storageZoneName'),'/',parameters('vnetName'),'-link')]",
+                            "condition": "[parameters('deployOnVnet')]",
                             "location": "global",
                             "properties": {
                                 "registrationEnabled": false,
@@ -492,6 +504,7 @@
                             "type": "Microsoft.Network/privateEndpoints",
                             "apiVersion": "2023-11-01",
                             "name": "[parameters('storageEndpointName')]",
+                            "condition": "[parameters('deployOnVnet')]",
                             "location": "[parameters('location')]",
                             "properties": {
                                 "subnet": {
@@ -517,6 +530,7 @@
                             "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
                             "apiVersion": "2022-07-01",
                             "name": "[concat(parameters('storageEndpointName'),'/','dnsgroupname')]",
+                            "condition": "[parameters('deployOnVnet')]",
                             "properties": {
                                 "privateDnsZoneConfigs": [
                                     {
